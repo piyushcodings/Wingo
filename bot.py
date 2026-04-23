@@ -2,6 +2,7 @@ import requests
 import asyncio
 import time
 import random
+import re
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -10,7 +11,8 @@ api_id = 23907288
 api_hash = "f9a47570ed19aebf8eb0f0a5ec1111e5"
 bot_token = "8670925766:AAEXImOGX5KSYraU2Bob99U-6_-70L0f26g"
 
-app = Client("wingo-ultra-final", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
+
+app = Client("wingo-ai-final", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
 
 API_MAP = {
     "30s": "30S",
@@ -20,8 +22,11 @@ API_MAP = {
 }
 
 last_period = None
+last_prediction = None
+wins = 0
+losses = 0
 
-# 📊 FETCH HISTORY
+# 📊 FETCH DATA
 def fetch_data(mode):
     try:
         url = f"https://draw.ar-lottery01.com/WinGo/WinGo_{API_MAP[mode]}/GetHistoryIssuePage.json?page=1&size=50"
@@ -37,117 +42,76 @@ def get_time_data(mode):
     except:
         return None
 
-# 🔄 BIG SMALL
-def to_bs(n): return "B" if n >= 5 else "S"
+# 🔄 BS
+def to_bs(n): return "BIG" if n >= 5 else "SMALL"
 
-# 🎨 COLOR
-def get_color(c):
-    if "red" in c: return "RED"
-    if "green" in c: return "GREEN"
-    return "VIOLET"
-
-# 🧠 ADVANCED LOGIC ENGINE
+# 🧠 LOCAL LOGIC
 def advanced_logic(data):
     nums = [int(i["number"]) for i in data[:30]]
-    colors = [get_color(i["color"]) for i in data[:30]]
-
-    score = {"B":0, "S":0}
+    score = {"BIG":0,"SMALL":0}
     reasons = []
 
-    # 🔥 trend
     b = sum(1 for n in nums if n >= 5)
     s = len(nums) - b
+
     if b > s:
-        score["B"] += 3
+        score["BIG"] += 3
         reasons.append("Trend BIG")
     else:
-        score["S"] += 3
+        score["SMALL"] += 3
         reasons.append("Trend SMALL")
 
-    # 🔥 streak
     last5 = [to_bs(n) for n in nums[:5]]
-    if len(set(last5)) == 1:
-        flip = "B" if last5[0] == "S" else "S"
-        score[flip] += 3
-        reasons.append("Streak break")
 
-    # 🔥 momentum
+    if len(set(last5)) == 1:
+        flip = "BIG" if last5[0] == "SMALL" else "SMALL"
+        score[flip] += 3
+        reasons.append("Streak Break")
+
     score[last5[0]] += 2
     reasons.append("Momentum")
 
-    # 🔥 volatility
-    diff = sum(abs(nums[i]-nums[i+1]) for i in range(len(nums)-1))
-    if diff > 60:
-        score[random.choice(["B","S"])] += 1
-        reasons.append("Volatility")
-
-    # 🔥 color influence
-    g = colors.count("GREEN")
-    r = colors.count("RED")
-    if g > r:
-        score["B"] += 1
-    else:
-        score["S"] += 1
-
-    final = "B" if score["B"] > score["S"] else "S"
-    conf = int((max(score.values()) / sum(score.values())) * 100)
-
-    if conf < 55:
-        return "SKIP", conf, reasons
-
-    return ("BIG" if final=="B" else "SMALL"), conf, reasons
-
-# 🎨 COLOR ENGINE
-def color_logic(data):
-    colors = [get_color(i["color"]) for i in data[:30]]
-
-    score = {"RED":0,"GREEN":0}
-
-    for c in colors[:20]:
-        if c in score:
-            score[c] += 1
-
-    if len(set(colors[:4])) == 1:
-        score[random.choice(["RED","GREEN"])] += 2
-
     final = max(score, key=score.get)
-    conf = int(score[final] / sum(score.values()) * 100)
+    conf = int((score[final] / sum(score.values())) * 100)
 
-    return final, conf
+    return final, conf, reasons
 
-# 🤖 AI FULL DATA
-def ask_ai(data):
+# 🤖 AI FULL JSON
+def ask_ai_full(data):
     try:
-        nums = [int(i["number"]) for i in data[:30]]
-        colors = [i["color"] for i in data[:30]]
-
-        bs = ["BIG" if n>=5 else "SMALL" for n in nums]
-
-        big_count = bs.count("BIG")
-        small_count = bs.count("SMALL")
-
         prompt = f"""
-Analyze Wingo deeply.
+Analyze this Wingo JSON deeply:
 
-Numbers: {nums}
-BIG/SMALL: {bs}
-Colors: {colors}
+{data}
 
-Stats:
-BIG={big_count}, SMALL={small_count}
-
-Find trend, streak, pattern.
-Predict next BIG/SMALL with confidence and reason.
+Return:
+Prediction: BIG/SMALL
+Confidence: number
+Reason: short
 """
 
         url = "https://apis.prexzyvilla.site/ai/copilot-think?text=" + requests.utils.quote(prompt)
-        res = requests.get(url, timeout=8).json()
+        res = requests.get(url, timeout=10).json()
+        text = res.get("text", "")
 
-        return res.get("text", "")
+        pred = "SKIP"
+        conf = 50
+
+        if "BIG" in text.upper():
+            pred = "BIG"
+        elif "SMALL" in text.upper():
+            pred = "SMALL"
+
+        nums = re.findall(r"\d+", text)
+        if nums:
+            conf = int(nums[0])
+
+        return pred, conf, text
+
     except:
-        return ""
+        return "SKIP", 50, "AI error"
 
-# 🎛 UI
+# 🎛 MENU
 def mode_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("30s","mode_30s"),
@@ -156,32 +120,26 @@ def mode_menu():
          InlineKeyboardButton("5m","mode_5m")]
     ])
 
-def type_menu(mode):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("BIG/SMALL", f"type_bs_{mode}")],
-        [InlineKeyboardButton("COLOR", f"type_color_{mode}")],
-        [InlineKeyboardButton("BOTH", f"type_both_{mode}")]
-    ])
-
 # ▶️ START
 @app.on_message(filters.command("start"))
 def start(c,m):
-    m.reply("🤖 Wingo Ultra AI Bot\n\nSelect Mode:", reply_markup=mode_menu())
+    m.reply("Select Mode:", reply_markup=mode_menu())
 
 # 🎯 MODE
 @app.on_callback_query(filters.regex("mode_"))
-def mode(c,q):
-    m = q.data.split("_")[1]
-    q.message.edit_text("Select Prediction Type:", reply_markup=type_menu(m))
+async def mode_select(c,q):
+    mode = q.data.split("_")[1]
+    msg = await q.message.edit_text("Starting AI Engine...")
+    await live_loop(msg, mode)
 
-# 🔥 LIVE LOOP
-async def live_loop(msg, mode, ptype):
-    global last_period
+# 🔥 MAIN LOOP
+async def live_loop(msg, mode):
+    global last_period, last_prediction, wins, losses
 
     while True:
         tdata = get_time_data(mode)
         if not tdata:
-            await msg.edit_text("❌ API error")
+            await msg.edit_text("API error")
             return
 
         current = tdata["current"]["issueNumber"]
@@ -191,31 +149,74 @@ async def live_loop(msg, mode, ptype):
         left = (end - now)//1000
         timer = f"{left//60:02}:{left%60:02}"
 
+        # 🔥 NEW ROUND
         if current != last_period:
             last_period = current
 
             data = fetch_data(mode)
 
+            # RESULT CHECK
+            result_text = ""
+            if last_prediction:
+                actual = to_bs(int(data[0]["number"]))
+
+                if actual == last_prediction:
+                    wins += 1
+                    result_text = f"🏁 {actual} ✅ WIN"
+                else:
+                    losses += 1
+                    result_text = f"🏁 {actual} ❌ LOSS"
+
+            total = wins + losses
+            acc = int((wins/total)*100) if total else 0
+
+            # LOGIC
             bs_res, bs_conf, reasons = advanced_logic(data)
-            col_res, col_conf = color_logic(data)
-            ai_text = ask_ai(data)
 
-            text = f"🆕 ROUND {current}\n\n"
+            # AI
+            ai_pred, ai_conf, ai_text = ask_ai_full(data)
 
-            if ptype in ["bs","both"]:
-                text += f"📊 {bs_res} ({bs_conf}%)\n"
+            # 🔥 MERGE (AI DOMINANT)
+            final_pred = ai_pred
+            final_conf = int((ai_conf * 0.75) + (bs_conf * 0.25))
 
-            if ptype in ["color","both"]:
-                text += f"🎨 {col_res} ({col_conf}%)\n"
+            if ai_pred == "SKIP":
+                final_pred = bs_res
+                final_conf = bs_conf
 
-            text += f"\n⏱ {timer}\n"
-            text += f"\n🧠 {', '.join(reasons)}"
+            elif ai_pred != bs_res:
+                final_conf -= 10
 
-            if ai_text:
-                text += f"\n\n🤖 AI:\n{ai_text}"
+            if final_conf < 55:
+                final_pred = "SKIP"
+
+            last_prediction = final_pred
+
+            text = f"""
+🆕 ROUND {current}
+
+📊 FINAL: {final_pred} ({final_conf}%)
+
+🤖 AI: {ai_pred} ({ai_conf}%)
+🧠 LOGIC: {bs_res} ({bs_conf}%)
+
+⏱ {timer}
+
+{result_text}
+🎯 Accuracy: {acc}%
+
+🧾 {', '.join(reasons)}
+
+🤖 AI:
+{ai_text[:200]}
+"""
 
         else:
-            text = f"🆔 {current}\n⏱ {timer}\n⌛ Waiting..."
+            text = f"""
+🆔 {current}
+⏱ {timer}
+⌛ Waiting result...
+"""
 
         try:
             await msg.edit_text(text)
@@ -223,14 +224,6 @@ async def live_loop(msg, mode, ptype):
             pass
 
         await asyncio.sleep(1)
-
-# 🎯 FINAL
-@app.on_callback_query(filters.regex("type_"))
-async def final(c,q):
-    _,ptype,mode = q.data.split("_")
-
-    msg = await q.message.edit_text("⏳ Starting...")
-    await live_loop(msg, mode, ptype)
 
 # ▶️ RUN
 app.run()
