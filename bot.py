@@ -6,9 +6,9 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # 🔑 CONFIG
-api_id = 12345678
-api_hash = "your_api_hash"
-bot_token = "your_bot_token"
+api_id = 23907288
+api_hash = "f9a47570ed19aebf8eb0f0a5ec1111e5"
+bot_token = "8670925766:AAEXImOGX5KSYraU2Bob99U-6_-70L0f26g"
 
 app = Client("wingo-ultra-final", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
 
