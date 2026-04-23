@@ -10,17 +10,10 @@ bot_token = "8670925766:AAEXImOGX5KSYraU2Bob99U-6_-70L0f26g"
 
 app = Client("wingo-ai-bot", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
 
+
 # ===== GLOBAL =====
 last_prediction = None
 last_period = None
-wins = 0
-losses = 0
-
-strategy_stats = {
-    "pattern": {"win":0,"loss":0},
-    "zigzag": {"win":0,"loss":0},
-    "trend": {"win":0,"loss":0}
-}
 
 # ===== FETCH =====
 def fetch_history(mode):
@@ -34,33 +27,24 @@ def fetch_timer(mode):
 def to_bs(n):
     return "BIG" if int(n) >= 5 else "SMALL"
 
-# ===== LOGICS =====
-def pattern(data):
-    nums = [to_bs(i["number"]) for i in data[:10]]
-    return "BIG" if nums.count("BIG") > nums.count("SMALL") else "SMALL"
+# ===== PHASE DETECTION =====
+def detect_phase(data):
+    nums = [int(i["number"]) for i in data[:10]]
+    bs = ["B" if n >= 5 else "S" for n in nums]
 
-def zigzag(data):
-    nums = [to_bs(i["number"]) for i in data[:6]]
-    if nums in [["BIG","SMALL"]*3, ["SMALL","BIG"]*3]:
-        return "BIG" if nums[-1]=="SMALL" else "SMALL"
-    return None
+    if bs.count("B") >= 7 or bs.count("S") >= 7:
+        return "TREND"
 
-def trend(data):
-    nums = [to_bs(i["number"]) for i in data[:20]]
-    return "BIG" if nums.count("BIG") >= 10 else "SMALL"
+    pattern = "".join(bs[:6])
+    if pattern in ["BSBSBS", "SBSBSB"]:
+        return "ZIGZAG"
 
-# ===== WEIGHT =====
-def get_weight(name):
-    s = strategy_stats[name]
-    total = s["win"] + s["loss"]
-    if total == 0:
-        return 1
-    return s["win"] / total
+    return "RANDOM"
 
 # ===== AI =====
 def ask_ai(data):
     try:
-        payload = str(data[:20])
+        payload = [i["number"] for i in data[:15]]
         res = requests.get(f"https://apis.prexzyvilla.site/ai/copilot-think?text={payload}")
         text = res.json()["text"].lower()
 
@@ -70,29 +54,47 @@ def ask_ai(data):
             return "SMALL", 70
     except:
         pass
+
     return random.choice(["BIG","SMALL"]), 50
 
 # ===== PREDICT =====
 def predict(data):
-    scores = {"BIG":0,"SMALL":0}
-
-    p = pattern(data)
-    scores[p] += 2 * get_weight("pattern")
-
-    z = zigzag(data)
-    if z:
-        scores[z] += 3 * get_weight("zigzag")
-
-    t = trend(data)
-    scores[t] += 2 * get_weight("trend")
-
-    ai_pred, ai_conf = ask_ai(data)
-    scores[ai_pred] += ai_conf / 50
-
-    final_bs = max(scores, key=scores.get)
 
     nums = [int(i["number"]) for i in data[:20]]
+    bs = [to_bs(n) for n in nums]
 
+    phase = detect_phase(data)
+
+    # ===== PHASE BASED =====
+    if phase == "TREND":
+        last = bs[0]
+        final_bs = "BIG" if last == "SMALL" else "SMALL"
+
+    elif phase == "ZIGZAG":
+        last = bs[0]
+        final_bs = "BIG" if last == "SMALL" else "SMALL"
+
+    else:
+        final_bs = random.choice(["BIG","SMALL"])
+
+    # ===== ANTI SPAM =====
+    last4 = bs[:4]
+    if last4.count(last4[0]) == 4:
+        final_bs = "BIG" if last4[0]=="SMALL" else "SMALL"
+
+    # ===== AI MERGE =====
+    ai_pred, ai_conf = ask_ai(data)
+
+    if ai_pred == final_bs:
+        conf = int((ai_conf * 0.7) + 20)
+    else:
+        conf = int((ai_conf * 0.5) + 10)
+
+    # ===== SKIP =====
+    if conf < 55:
+        return "SKIP", "-", "-", conf, phase
+
+    # ===== NUMBER =====
     pool = [5,6,7,8,9] if final_bs=="BIG" else [0,1,2,3,4]
 
     freq = {n: nums.count(n) for n in pool}
@@ -102,6 +104,7 @@ def predict(data):
     if final_num == nums[0]:
         final_num = random.choice(pool)
 
+    # ===== COLOR =====
     color_map = {
         0:"RED",1:"GREEN",2:"RED",3:"GREEN",4:"RED",
         5:"GREEN/VIOLET",6:"RED",7:"GREEN",8:"RED",9:"GREEN"
@@ -109,9 +112,7 @@ def predict(data):
 
     final_color = color_map[final_num]
 
-    conf = int((scores[final_bs] / (sum(scores.values())+1)) * 100)
-
-    return final_bs, final_num, final_color, conf
+    return final_bs, final_num, final_color, conf, phase
 
 # ===== INLINE =====
 keyboard = InlineKeyboardMarkup([
@@ -131,7 +132,9 @@ async def callback(_, query):
     mode = query.data
     message = await query.message.edit("Starting...")
 
-    global last_prediction, last_period, wins, losses
+    global last_prediction, last_period
+
+    saved_prediction = None
 
     while True:
         try:
@@ -145,22 +148,12 @@ async def callback(_, query):
             remain = int((end_time - time.time()*1000)/1000)
             remain = max(remain, 0)
 
-            pred_bs, pred_num, pred_color, conf = predict(history)
+            # 🔥 NEW PERIOD → NEW PREDICTION
+            if period != last_period:
+                saved_prediction = predict(history)
+                last_period = period
 
-            # ===== RESULT CHECK =====
-            if last_period and period != last_period:
-                actual = to_bs(history[0]["number"])
-
-                if last_prediction == actual:
-                    wins += 1
-                    result = "WIN ✅"
-                else:
-                    losses += 1
-                    result = "LOSS ❌"
-            else:
-                result = "Waiting..."
-
-            acc = int((wins/(wins+losses))*100) if (wins+losses)>0 else 0
+            pred_bs, pred_num, pred_color, conf, phase = saved_prediction
 
             text = f"""
 🆔 {period}
@@ -169,17 +162,13 @@ async def callback(_, query):
 🔢 {pred_num}
 🎨 {pred_color}
 
-📊 {conf}%  
-⏱ {remain}s
+📊 {conf}%
+🧠 Phase: {phase}
 
-🏁 {result}
-🎯 Accuracy: {acc}%
+⏱ {remain}s
 """
 
             await message.edit(text)
-
-            last_prediction = pred_bs
-            last_period = period
 
             await asyncio.sleep(1)
 
