@@ -21,10 +21,14 @@ API_MAP = {
     "5m": "5M"
 }
 
+# 🔥 GLOBAL STATE
 last_period = None
 last_prediction = None
 wins = 0
 losses = 0
+
+current_prediction_text = ""
+current_result_text = ""
 
 # 📊 FETCH DATA
 def fetch_data(mode):
@@ -42,7 +46,7 @@ def get_time_data(mode):
     except:
         return None
 
-# 🔄 BS
+# 🔄 BIG/SMALL
 def to_bs(n): return "BIG" if n >= 5 else "SMALL"
 
 # 🧠 LOCAL LOGIC
@@ -129,17 +133,18 @@ def start(c,m):
 @app.on_callback_query(filters.regex("mode_"))
 async def mode_select(c,q):
     mode = q.data.split("_")[1]
-    msg = await q.message.edit_text("Starting AI Engine...")
+    msg = await q.message.edit_text("🚀 Starting AI Engine...")
     await live_loop(msg, mode)
 
 # 🔥 MAIN LOOP
 async def live_loop(msg, mode):
     global last_period, last_prediction, wins, losses
+    global current_prediction_text, current_result_text
 
     while True:
         tdata = get_time_data(mode)
         if not tdata:
-            await msg.edit_text("API error")
+            await msg.edit_text("❌ API Error")
             return
 
         current = tdata["current"]["issueNumber"]
@@ -149,13 +154,13 @@ async def live_loop(msg, mode):
         left = (end - now)//1000
         timer = f"{left//60:02}:{left%60:02}"
 
-        # 🔥 NEW ROUND
+        # 🆕 NEW ROUND
         if current != last_period:
             last_period = current
 
             data = fetch_data(mode)
 
-            # RESULT CHECK
+            # 🏁 RESULT CHECK
             result_text = ""
             if last_prediction:
                 actual = to_bs(int(data[0]["number"]))
@@ -167,13 +172,15 @@ async def live_loop(msg, mode):
                     losses += 1
                     result_text = f"🏁 {actual} ❌ LOSS"
 
+            current_result_text = result_text
+
             total = wins + losses
             acc = int((wins/total)*100) if total else 0
 
-            # LOGIC
+            # 🧠 LOGIC
             bs_res, bs_conf, reasons = advanced_logic(data)
 
-            # AI
+            # 🤖 AI
             ai_pred, ai_conf, ai_text = ask_ai_full(data)
 
             # 🔥 MERGE (AI DOMINANT)
@@ -192,30 +199,29 @@ async def live_loop(msg, mode):
 
             last_prediction = final_pred
 
-            text = f"""
-🆕 ROUND {current}
-
+            # 🔒 STORE (IMPORTANT FIX)
+            current_prediction_text = f"""
 📊 FINAL: {final_pred} ({final_conf}%)
 
 🤖 AI: {ai_pred} ({ai_conf}%)
 🧠 LOGIC: {bs_res} ({bs_conf}%)
 
-⏱ {timer}
-
-{result_text}
-🎯 Accuracy: {acc}%
-
 🧾 {', '.join(reasons)}
 
 🤖 AI:
-{ai_text[:200]}
+{ai_text[:150]}
 """
 
-        else:
-            text = f"""
+        # 🔄 TIMER UPDATE (NO OVERWRITE)
+        text = f"""
 🆔 {current}
+
+{current_prediction_text}
+
 ⏱ {timer}
-⌛ Waiting result...
+
+{current_result_text}
+🎯 Accuracy: {int((wins/(wins+losses))*100) if (wins+losses)>0 else 0}%
 """
 
         try:
